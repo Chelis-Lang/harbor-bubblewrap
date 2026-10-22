@@ -1,0 +1,1 @@
+Make a Git repository at `/app/repo` with exactly one commit. The commit must add only the file `README.md`, which contains one line with the text `hello`. The commit message must be `Initial commit`.

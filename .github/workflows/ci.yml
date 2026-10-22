@@ -1,0 +1,76 @@
+name: CI
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  PYTHONUNBUFFERED: '1'
+jobs:
+  distribution-core:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build source distribution and wheel
+        run: |
+          python -m pip install build
+          python -m build
+      - name: Install the core wheel without Harbor
+        run: |
+          python -m venv "$RUNNER_TEMP/plugin-core"
+          "$RUNNER_TEMP/plugin-core/bin/python" -m pip install dist/*.whl 'pytest>=8'
+          cp -R tests "$RUNNER_TEMP/plugin-core-tests"
+      - name: Test the installed core outside the checkout
+        working-directory: ${{ runner.temp }}
+        run: |
+          "$RUNNER_TEMP/plugin-core/bin/python" - <<'PY'
+          import importlib.util
+          assert importlib.util.find_spec("harbor") is None
+          PY
+          "$RUNNER_TEMP/plugin-core/bin/python" -m pytest -q "$RUNNER_TEMP/plugin-core-tests"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: distributions
+          path: dist/
+          if-no-files-found: error
+  linux-harbor:
+    needs: distribution-core
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: distributions
+          path: ${{ runner.temp }}/wheels
+      - name: Install namespace tools and pinned Nix
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap uidmap python3.12 curl xz-utils
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo usermod --add-subuids 1000000-1065535 --add-subgids 1000000-1065535 "$(id -un)"
+          sudo mkdir -p /nix
+          sudo chown "$(id -u):$(id -g)" /nix
+          sh tools/install-nix.sh
+      - name: Install the wheel with stock Harbor
+        run: |
+          python -m venv "$RUNNER_TEMP/plugin-harbor"
+          "$RUNNER_TEMP/plugin-harbor/bin/python" -m pip install "$RUNNER_TEMP/wheels/harbor_bubblewrap-0.1.0-py3-none-any.whl[harbor,test]"
+          cp -R tests "$RUNNER_TEMP/plugin-harbor-tests"
+      - name: Test stock Harbor and all four example tasks
+        working-directory: ${{ runner.temp }}
+        env:
+          HELL_TEST_NAMESPACES: '1'
+        run: |
+          . "$HOME/.nix-profile/etc/profile.d/nix.sh"
+          "$RUNNER_TEMP/plugin-harbor/bin/python" -m pytest -q "$RUNNER_TEMP/plugin-harbor-tests"

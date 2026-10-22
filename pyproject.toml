@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "harbor-bubblewrap"
+version = "0.1.0"
+description = "Harbor environments with bubblewrap and Nix"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["PyYAML>=6,<7"]
+
+[project.optional-dependencies]
+harbor = ["harbor==0.24.0", "dockerfile-parse==2.0.1"]
+test = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["harbor_bubblewrap"]
+namespaces = false
+
+[tool.setuptools.package-data]
+harbor_bubblewrap = ["tasks/**/*", "probe/*.nix"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

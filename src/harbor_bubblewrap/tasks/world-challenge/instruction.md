@@ -1,0 +1,1 @@
+A world service listens on the Unix socket `/shared/world.sock`. Each request is one line, and each reply is one line. Send `challenge` to get a number N. Then send `answer M`, where M is the square of N. The world records each answer.

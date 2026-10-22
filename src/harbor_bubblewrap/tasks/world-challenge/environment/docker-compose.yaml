@@ -1,0 +1,31 @@
+# Three roles, as in the dev/hell task layout: the seat (main), a world service
+# and a separate verifier (tests/). The seat and the world share only the socket
+# volume. The world keeps its evidence in a volume that the seat cannot see.
+services:
+  main:
+    user: "501:501"
+    network_mode: none
+    working_dir: /workspace
+    depends_on:
+      world:
+        condition: service_healthy
+    volumes:
+      - shared:/shared
+  world:
+    build:
+      context: .
+      dockerfile: world.Dockerfile
+    user: "501:501"
+    network_mode: none
+    command: ["python3", "-I", "/opt/world/world.py"]
+    healthcheck:
+      test: ["CMD", "python3", "-I", "/opt/world/health.py"]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - shared:/shared
+      - evidence:/evidence
+volumes:
+  shared:
+  evidence:

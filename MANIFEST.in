@@ -1,0 +1,5 @@
+recursive-include src/harbor_bubblewrap/tasks *
+recursive-include src/harbor_bubblewrap/probe *.nix
+recursive-include tests *.py *.nix
+include tools/install-nix.sh
+include .github/workflows/ci.yml
