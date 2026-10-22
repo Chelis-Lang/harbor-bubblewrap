@@ -275,6 +275,27 @@ async def main(environment_dir, trial_dir):
             results["host_link_blocked"] = not forbidden.exists()
         else:
             results["host_link_blocked"] = False
+        command = (
+            "mkdir -p /app/data && printf 'payload' > /app/data/real && "
+            "ln -s " + shlex.quote(str(secret)) + " /app/data/leak"
+        )
+        result = await environment.exec(command)
+        assert result.return_code == 0, result.stderr
+        directory = trial / "download-dir"
+        try:
+            await environment.download_dir("/app/data", directory)
+        except RuntimeError:
+            results["dir_link_blocked"] = list(directory.iterdir()) == []
+        else:
+            results["dir_link_blocked"] = False
+        result = await environment.exec("printf '/etc/absent.so\\n' > /etc/ld.so.preload")
+        assert result.return_code == 0, result.stderr
+        try:
+            await environment.download_file("/app/absent-input", trial / "absent")
+        except RuntimeError as error:
+            results["preload_ignored"] = "ld.so" not in str(error)
+        else:
+            results["preload_ignored"] = False
         emit = (
             "with open('/proc/1/fd/1', 'w') as stream: "
             "stream.write('old-prefix' + 'x' * 65536 + 'service-diagnostic')"
@@ -324,6 +345,8 @@ def test_host_boundary_and_transfers_survive_service_changes(tmp_path, monkeypat
     assert result["process"] == {"canary": False, "regular_files": []}
     assert result["network_blocked"] is True
     assert result["host_link_blocked"] is True
+    assert result["dir_link_blocked"] is True
+    assert result["preload_ignored"] is True
     assert result["download"] == "public-payload"
     assert result["stopped_error"].endswith("service-diagnostic")
     assert "old-prefix" not in result["stopped_error"]

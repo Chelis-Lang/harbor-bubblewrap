@@ -13,6 +13,7 @@ See the package README for the supported contract and limits.
 from __future__ import annotations
 
 import asyncio
+import os
 import platform
 import shutil
 import tempfile
@@ -326,6 +327,7 @@ class BubblewrapEnvironment(BaseEnvironment):
                 [source_path, str(TARGET)],
                 Bind(staging, TARGET, writable=True),
             )
+            _require_plain_transfer(staging)
             shutil.move(staging / "file", target)
         finally:
             shutil.rmtree(staging, ignore_errors=True)
@@ -335,12 +337,18 @@ class BubblewrapEnvironment(BaseEnvironment):
     ) -> None:
         target = Path(target_dir)
         target.mkdir(parents=True, exist_ok=True)
-        await self._require_runtime().copy(
-            name,
-            'cp -R -- "$1"/. "$2"',
-            [source_dir, str(TARGET)],
-            Bind(target.resolve(), TARGET, writable=True),
-        )
+        staging = Path(tempfile.mkdtemp(dir=self._require_state()))
+        try:
+            await self._require_runtime().copy(
+                name,
+                'cp -R -- "$1"/. "$2"',
+                [source_dir, str(TARGET)],
+                Bind(staging, TARGET, writable=True),
+            )
+            _require_plain_transfer(staging)
+            shutil.copytree(staging, target, dirs_exist_ok=True)
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
 
     def _service_binds(self, service: compose.Service) -> tuple[Bind, ...]:
         """Named volumes are host directories in the sandbox state, shared by services."""
@@ -432,3 +440,22 @@ def _dockerfile_workdir(path: Path | None) -> str | None:
             if value:
                 workdir = str(PurePosixPath(workdir or "/") / value)
     return workdir
+
+
+def _require_plain_transfer(directory: Path) -> None:
+    """Raise unless each copied entry is a regular file or a directory.
+
+    The copy process writes into a host bind and can make any entry there. A
+    link or a special file in that bind could hand the host a path that it
+    reads outside the sandbox. Harbor reads the downloaded entries on the host.
+    """
+    with os.scandir(directory) as entries:
+        for entry in entries:
+            if entry.is_symlink():
+                raise RuntimeError(f"The download of {entry.path} is a symbolic link")
+            if entry.is_dir(follow_symlinks=False):
+                _require_plain_transfer(Path(entry.path))
+            elif not entry.is_file(follow_symlinks=False):
+                raise RuntimeError(
+                    f"The download of {entry.path} is not a regular file"
+                )

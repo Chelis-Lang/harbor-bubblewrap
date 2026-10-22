@@ -29,6 +29,12 @@ PATH = "/usr/bin:/bin"
 # process, so its mount points never reach the persistent root.
 TRANSFER_DIR = PurePosixPath("/.harbor-transfer")
 
+# The dynamic loader of a copy process reads this file from the writable root,
+# which a seat can write. The empty file below covers it, so a seat cannot load
+# its own library into a process that writes to a host bind.
+PRELOAD = "/etc/ld.so.preload"
+EMPTY_PRELOAD = Path(__file__).with_name("ld.so.preload")
+
 PASSWD = "root:x:0:0:root:/root:/bin/bash\nnobody:x:65534:65534:nobody:/nonexistent:/bin/false\n"
 GROUP = "root:x:0:\nnogroup:x:65534:\n"
 
@@ -80,10 +86,16 @@ class Sandbox:
         """Return the bwrap argv of a copy process over the same file tree.
 
         A copy process runs as user 0 in namespaces of its own, so a link in
-        the sandbox resolves inside the sandbox, not on the host.
+        the sandbox resolves inside the sandbox, not on the host. It loads no
+        library named by the root: an empty preload file covers one seat path.
         """
         args = self._namespace_args(0, 0) + self._layout_args()
         args += ["--tmpfs", str(TRANSFER_DIR)]
+        # A bind creates its mount point in the root. Cover a preload file only
+        # when the root has one, so a copy leaves the root as it found it.
+        preload = self.root / sandbox_relative(PRELOAD)
+        if preload.exists() or preload.is_symlink():
+            args += ["--ro-bind", str(EMPTY_PRELOAD), PRELOAD]
         for bind in binds:
             args += _bind_args(bind)
         environment = {"PATH": str(self.environment / "bin"), "HOME": "/root"}

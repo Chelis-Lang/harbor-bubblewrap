@@ -11,30 +11,15 @@ jobs:
   distribution-core:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
-      - name: Build source distribution and wheel
-        run: |
-          python -m pip install build
-          python -m build
-      - name: Install the core wheel without Harbor
-        run: |
-          python -m venv "$RUNNER_TEMP/plugin-core"
-          "$RUNNER_TEMP/plugin-core/bin/python" -m pip install dist/*.whl 'pytest>=8'
-          cp -R tests "$RUNNER_TEMP/plugin-core-tests"
-      - name: Test the installed core outside the checkout
-        working-directory: ${{ runner.temp }}
-        run: |
-          "$RUNNER_TEMP/plugin-core/bin/python" - <<'PY'
-          import importlib.util
-          assert importlib.util.find_spec("harbor") is None
-          PY
-          "$RUNNER_TEMP/plugin-core/bin/python" -m pytest -q "$RUNNER_TEMP/plugin-core-tests"
-      - uses: actions/upload-artifact@v4
+      - name: Check lint, distributions, and the installed core wheel
+        run: python tools/check.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: distributions
           path: dist/
@@ -43,13 +28,13 @@ jobs:
     needs: distribution-core
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: distributions
           path: ${{ runner.temp }}/wheels
@@ -65,7 +50,10 @@ jobs:
       - name: Install the wheel with stock Harbor
         run: |
           python -m venv "$RUNNER_TEMP/plugin-harbor"
-          "$RUNNER_TEMP/plugin-harbor/bin/python" -m pip install "$RUNNER_TEMP/wheels/harbor_bubblewrap-0.1.0-py3-none-any.whl[harbor,test]"
+          wheels=("$RUNNER_TEMP"/wheels/*.whl)
+          test "${#wheels[@]}" -eq 1
+          "$RUNNER_TEMP/plugin-harbor/bin/python" -m pip install "${wheels[0]}[harbor,test]"
+          "$RUNNER_TEMP/plugin-harbor/bin/python" -m pip check
           cp -R tests "$RUNNER_TEMP/plugin-harbor-tests"
       - name: Test stock Harbor and all four example tasks
         working-directory: ${{ runner.temp }}
@@ -73,4 +61,12 @@ jobs:
           HELL_TEST_NAMESPACES: '1'
         run: |
           . "$HOME/.nix-profile/etc/profile.d/nix.sh"
-          "$RUNNER_TEMP/plugin-harbor/bin/python" -m pytest -q "$RUNNER_TEMP/plugin-harbor-tests"
+          "$RUNNER_TEMP/plugin-harbor/bin/python" -I - <<'PY'
+          import os
+          from pathlib import Path
+
+          import harbor_bubblewrap.environment
+
+          assert not Path(harbor_bubblewrap.environment.__file__).resolve().is_relative_to(Path(os.environ["GITHUB_WORKSPACE"]))
+          PY
+          "$RUNNER_TEMP/plugin-harbor/bin/python" -I -m pytest -q "$RUNNER_TEMP/plugin-harbor-tests"
