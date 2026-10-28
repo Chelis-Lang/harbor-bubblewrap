@@ -1,5 +1,10 @@
 # Change history
 
+## 0.1.3 (unreleased)
+
+- Preserve declared mounts in mapped uploads and downloads.
+- Keep each mount's read-only or writable policy in the copy namespace.
+
 ## 0.1.2 (unreleased)
 
 - Run every upload and download through one package-owned helper in a read-only host root, with the sandbox tree as data.

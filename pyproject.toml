@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "harbor-bubblewrap"
-version = "0.1.2"
+version = "0.1.3"
 description = "Harbor environments with bubblewrap and Nix"
 readme = "README.md"
 license = "MIT"
