@@ -46,7 +46,7 @@ Run the namespace checks against a wheel outside the source checkout:
 python3.12 tools/check.py
 CHECK_DIR="$(mktemp -d)"
 python3.12 -m venv "$CHECK_DIR/venv"
-"$CHECK_DIR/venv/bin/python" -m pip install './dist/harbor_bubblewrap-0.1.1-py3-none-any.whl[harbor,test]'
+"$CHECK_DIR/venv/bin/python" -m pip install './dist/harbor_bubblewrap-0.1.3-py3-none-any.whl[harbor,test]'
 cp -R tests "$CHECK_DIR/tests"
 cd "$CHECK_DIR"
 HELL_TEST_NAMESPACES=1 "$CHECK_DIR/venv/bin/python" -I -m pytest -q "$CHECK_DIR/tests"

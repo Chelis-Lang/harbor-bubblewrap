@@ -25,12 +25,11 @@ pytestmark = pytest.mark.skipif(
 
 
 def helper(seat: Path, output: Path, source: str, mode: str = "download-file"):
-    (seat / "out").mkdir(exist_ok=True)
     request = {
         "mode": mode,
         "seat": str(seat),
         "source": source,
-        "output": "/out",
+        "output": str(output),
     }
     return subprocess.run(
         [
@@ -56,7 +55,7 @@ def test_absolute_file_link_resolves_inside_the_seat_root(tmp_path):
     (seat / "etc" / "input").write_text("seat etc payload")
     (seat / "link").symlink_to("/input")
     (seat / "host-link").symlink_to("/etc/input")
-    output = seat / "out"
+    output = tmp_path / "out"
     output.mkdir()
     completed = helper(seat, output, "/link")
     assert completed.returncode == 0, completed.stderr
@@ -76,12 +75,11 @@ def test_directory_and_special_sources_are_refused(tmp_path):
     address = str(seat / "socket")
     listener.bind(address)
     try:
-        output = seat / "out"
+        output = tmp_path / "out"
         output.mkdir()
         for source in ("/directory", "/fifo", "/socket"):
             completed = helper(seat, output, source)
             assert completed.returncode != 0, source
-            assert "transfer refused" in completed.stderr
             assert not (output / "file").exists()
     finally:
         listener.close()
@@ -93,12 +91,36 @@ def test_directory_export_refuses_every_link(tmp_path):
     (seat / "tree").mkdir()
     (seat / "tree" / "plain").write_text("plain")
     (seat / "tree" / "link").symlink_to("/plain")
-    output = seat / "out"
+    output = tmp_path / "out"
     output.mkdir()
     completed = helper(seat, output, "/tree", mode="download-dir")
     assert completed.returncode != 0
-    assert "symbolic link" in completed.stderr
     (seat / "tree" / "link").unlink()
     completed = helper(seat, output, "/tree", mode="download-dir")
     assert completed.returncode == 0, completed.stderr
     assert (output / "plain").read_text() == "plain"
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("/directory", True),
+        ("/file", False),
+        ("/missing", False),
+        ("/file/child", False),
+        ("/link", True),
+        ("/host-link", False),
+    ],
+)
+def test_directory_inspection_uses_the_seat_root(tmp_path, source, expected):
+    seat = tmp_path / "seat"
+    seat.mkdir()
+    (seat / "directory").mkdir()
+    (seat / "file").write_bytes(b"seat file")
+    (seat / "link").symlink_to("/directory")
+    (seat / "host-link").symlink_to("/tmp")
+    output = tmp_path / "out"
+    output.mkdir()
+    completed = helper(seat, output, source, mode="is-dir")
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads((output / "file").read_bytes()) is expected

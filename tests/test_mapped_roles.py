@@ -4,11 +4,11 @@ import asyncio
 import json
 import os
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 from harbor_bubblewrap.holder import Holder
-from harbor_bubblewrap.sandbox import Sandbox, prepare_root
+from harbor_bubblewrap.sandbox import TRANSFER_SOURCE, Bind, Sandbox, prepare_root
 from harbor_bubblewrap.transfer import Transfer
 
 pytestmark = pytest.mark.skipif(
@@ -137,5 +137,127 @@ def test_mapped_seat_cannot_read_root_file_and_stopped_tree_can_be_copied(tmp_pa
                     assert cleaned.return_code == 0, cleaned.stderr
                 finally:
                     await cleaner.stop()
+
+    asyncio.run(exercise())
+
+
+def test_mapped_transfers_preserve_declared_mounts_and_write_policy(tmp_path):
+    async def exercise():
+        root = tmp_path / "root"
+        prepare_root(
+            root, hostname="mounted", workdirs=("/",), resolv_conf=None, rootfs=None
+        )
+        shared = tmp_path / "shared"
+        shared.mkdir()
+        readonly = tmp_path / "readonly"
+        readonly.mkdir()
+        (readonly / "kept").write_bytes(b"unchanged")
+        source = tmp_path / "input"
+        file_script = b"#!/bin/bash\nprintf 'host input'\n"
+        source.write_bytes(file_script)
+        source.chmod(0o755)
+        source_tree = tmp_path / "input-tree"
+        source_tree.mkdir()
+        tree_script = b"#!/bin/bash\nprintf 'directory input'\n"
+        (source_tree / "payload").write_bytes(tree_script)
+        (source_tree / "payload").chmod(0o755)
+        output = tmp_path / "output"
+        output.mkdir()
+        closure = tuple(
+            path
+            for path in ("/usr", "/lib", "/lib64", "/etc/alternatives")
+            if Path(path).exists()
+        )
+        holder = Holder(
+            Sandbox(
+                root,
+                Path("/usr"),
+                closure,
+                binds=(
+                    Bind(shared, PurePosixPath("/shared"), True),
+                    Bind(readonly, PurePosixPath("/readonly"), False),
+                ),
+                mapped_ids=True,
+                capabilities=11,
+            )
+        )
+        try:
+            await holder.start(
+                ["sleep", "infinity"], workdir="/", environment={"PATH": "/usr/bin"}
+            )
+            written = await holder.exec(
+                ["bash", "-c", "printf 'seat output' > /shared/result"],
+                uid=0,
+                gid=0,
+                cwd="/",
+                environment={"PATH": "/usr/bin"},
+                timeout_sec=10,
+            )
+            assert written.return_code == 0, written.stderr
+            uploaded = await holder.transfer(
+                Transfer(
+                    "upload-file", TRANSFER_SOURCE, target="/shared/input", input=source
+                )
+            )
+            assert uploaded.return_code == 0, uploaded.stderr
+            assert (shared / "input").read_bytes() == file_script
+            uploaded_tree = await holder.transfer(
+                Transfer(
+                    "upload-dir",
+                    TRANSFER_SOURCE,
+                    target="/shared/tree",
+                    input=source_tree,
+                )
+            )
+            assert uploaded_tree.return_code == 0, uploaded_tree.stderr
+            assert (shared / "tree/payload").read_bytes() == tree_script
+            uploaded_again = await holder.transfer(
+                Transfer(
+                    "upload-file",
+                    TRANSFER_SOURCE,
+                    target="/shared/after-directory",
+                    input=source,
+                )
+            )
+            assert uploaded_again.return_code == 0, uploaded_again.stderr
+            assert (shared / "after-directory").read_bytes() == file_script
+            visible = await holder.exec(
+                ["/shared/input"],
+                uid=0,
+                gid=0,
+                cwd="/",
+                environment={"PATH": "/usr/bin"},
+                timeout_sec=10,
+            )
+            assert visible.return_code == 0, visible.stderr
+            assert visible.stdout == "host input"
+            tree_executed = await holder.exec(
+                ["/shared/tree/payload"],
+                uid=0,
+                gid=0,
+                cwd="/",
+                environment={"PATH": "/usr/bin"},
+                timeout_sec=10,
+            )
+            assert tree_executed.return_code == 0, tree_executed.stderr
+            assert tree_executed.stdout == "directory input"
+            refused = await holder.transfer(
+                Transfer(
+                    "upload-file",
+                    TRANSFER_SOURCE,
+                    target="/readonly/kept",
+                    input=source,
+                )
+            )
+            assert refused.return_code != 0
+            assert (readonly / "kept").read_bytes() == b"unchanged"
+            await holder.stop()
+            downloaded = await holder.transfer(
+                Transfer("download-file", "/shared/result", output=output)
+            )
+            assert downloaded.return_code == 0, downloaded.stderr
+            assert (output / "file").read_bytes() == b"seat output"
+        finally:
+            await holder.stop()
 
     asyncio.run(exercise())

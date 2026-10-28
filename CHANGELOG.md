@@ -1,5 +1,14 @@
 # Change history
 
+## 0.1.3 (unreleased)
+
+- Preserve declared mounts in mapped uploads and downloads.
+- Keep each mount's read-only or writable policy in the copy namespace.
+- Put host transfer binds in a private tmpfs outside the persistent seat tree.
+- Support file and directory uploads in either order without a mountpoint collision.
+- Inspect directory paths after service stop without a directory copy.
+- Preserve file read, write, and execute permissions on upload. Clear special mode bits.
+
 ## 0.1.2 (unreleased)
 
 - Run every upload and download through one package-owned helper in a read-only host root, with the sandbox tree as data.

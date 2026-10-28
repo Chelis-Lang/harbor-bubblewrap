@@ -136,7 +136,9 @@ def _pinned_directory(path: str, resolved: int) -> int:
     return descriptor
 
 
-def _write_file(directory: int, name: str, source: int, *, replace: bool) -> None:
+def _write_file(
+    directory: int, name: str, source: int, *, replace: bool, mode: int = FILE_MODE
+) -> None:
     """Publish one regular file in ``directory``, through no links."""
     try:
         existing = _open(directory, name, os.O_PATH | os.O_NOFOLLOW)
@@ -158,7 +160,7 @@ def _write_file(directory: int, name: str, source: int, *, replace: bool) -> Non
     target = _open(
         directory, name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
     )
-    os.fchmod(target, FILE_MODE)
+    os.fchmod(target, mode)
     try:
         _copy_bytes(source, target)
     finally:
@@ -173,6 +175,24 @@ def _make_directory(directory: int, name: str) -> int:
     descriptor = _open(directory, name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     _require(os.fstat(descriptor).st_mode, _is_directory, "a directory", name)
     return descriptor
+
+
+def _inspect_directory(root: int, source: str, output: int) -> None:
+    try:
+        resolved, keep = _resolve(root, root, source)
+    except (FileNotFoundError, NotADirectoryError):
+        directory = False
+    else:
+        try:
+            directory = stat.S_ISDIR(os.fstat(resolved).st_mode)
+        finally:
+            _close([resolved, *keep])
+    descriptor = _open(
+        output, "file", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    )
+    with os.fdopen(descriptor, "wb") as stream:
+        os.fchmod(stream.fileno(), FILE_MODE)
+        stream.write(b"true" if directory else b"false")
 
 
 def _download_file(root: int, source: str, output: int) -> None:
@@ -263,7 +283,13 @@ def _upload_file(seat: int, source: int, target: str) -> None:
     contents = _pinned_regular("upload source", source)
     parent = _destination_directory(seat, target, create=True)
     try:
-        _write_file(parent, posixpath.basename(target), contents, replace=True)
+        _write_file(
+            parent,
+            posixpath.basename(target),
+            contents,
+            replace=True,
+            mode=os.fstat(contents).st_mode & 0o777,
+        )
     finally:
         os.close(contents)
         os.close(parent)
@@ -289,7 +315,7 @@ def _copy_upload_tree(source: int, seat: int, where: str) -> None:
             elif stat.S_ISREG(mode):
                 contents = _pinned_regular(name, child)
                 try:
-                    _write_file(seat, name, contents, replace=True)
+                    _write_file(seat, name, contents, replace=True, mode=mode & 0o777)
                 finally:
                     os.close(contents)
             else:
@@ -308,6 +334,7 @@ def _upload_dir(seat: int, source: int, target: str) -> None:
 
 
 MODES = {
+    "is-dir": _inspect_directory,
     "download-file": _download_file,
     "download-dir": _download_dir,
     "upload-file": _upload_file,
@@ -315,9 +342,9 @@ MODES = {
 }
 
 
-def _seat_path(seat: int, path: str) -> int:
-    """Open a bind that the copy view holds inside the seat root."""
-    resolved, keep = _resolve(seat, seat, path)
+def _transfer_path(path: str) -> int:
+    """Open one host bind outside the persistent seat tree."""
+    resolved = os.open(path, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
         info = os.fstat(resolved)
         _require(
@@ -328,7 +355,7 @@ def _seat_path(seat: int, path: str) -> int:
         )
         following = _reopen(resolved, os.O_RDONLY | os.O_NONBLOCK)
     finally:
-        _close([resolved, *keep])
+        os.close(resolved)
     _require(
         os.fstat(following).st_mode,
         lambda mode: stat.S_ISREG(mode) or stat.S_ISDIR(mode),
@@ -344,14 +371,14 @@ def main(request: dict) -> None:
         raise Refused(f"unknown transfer mode {mode!r}")
     seat = os.open(request["seat"], os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     try:
-        if mode.startswith("download-"):
-            output = _seat_path(seat, request["output"])
+        if mode.startswith("download-") or mode == "is-dir":
+            output = _transfer_path(request["output"])
             try:
                 MODES[mode](seat, request["source"], output)
             finally:
                 os.close(output)
         else:
-            source = _seat_path(seat, request["source"])
+            source = _transfer_path(request["source"])
             try:
                 MODES[mode](seat, source, request["target"])
             finally:
