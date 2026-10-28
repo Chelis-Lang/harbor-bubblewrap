@@ -315,9 +315,9 @@ MODES = {
 }
 
 
-def _seat_path(seat: int, path: str) -> int:
-    """Open a bind that the copy view holds inside the seat root."""
-    resolved, keep = _resolve(seat, seat, path)
+def _transfer_path(path: str) -> int:
+    """Open one host bind outside the persistent seat tree."""
+    resolved = os.open(path, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
         info = os.fstat(resolved)
         _require(
@@ -328,7 +328,7 @@ def _seat_path(seat: int, path: str) -> int:
         )
         following = _reopen(resolved, os.O_RDONLY | os.O_NONBLOCK)
     finally:
-        _close([resolved, *keep])
+        os.close(resolved)
     _require(
         os.fstat(following).st_mode,
         lambda mode: stat.S_ISREG(mode) or stat.S_ISDIR(mode),
@@ -345,13 +345,13 @@ def main(request: dict) -> None:
     seat = os.open(request["seat"], os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     try:
         if mode.startswith("download-"):
-            output = _seat_path(seat, request["output"])
+            output = _transfer_path(request["output"])
             try:
                 MODES[mode](seat, request["source"], output)
             finally:
                 os.close(output)
         else:
-            source = _seat_path(seat, request["source"])
+            source = _transfer_path(request["source"])
             try:
                 MODES[mode](seat, source, request["target"])
             finally:

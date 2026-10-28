@@ -154,6 +154,9 @@ def test_mapped_transfers_preserve_declared_mounts_and_write_policy(tmp_path):
         (readonly / "kept").write_bytes(b"unchanged")
         source = tmp_path / "input"
         source.write_bytes(b"host input")
+        source_tree = tmp_path / "input-tree"
+        source_tree.mkdir()
+        (source_tree / "payload").write_bytes(b"directory input")
         output = tmp_path / "output"
         output.mkdir()
         closure = tuple(
@@ -194,6 +197,26 @@ def test_mapped_transfers_preserve_declared_mounts_and_write_policy(tmp_path):
             )
             assert uploaded.return_code == 0, uploaded.stderr
             assert (shared / "input").read_bytes() == b"host input"
+            uploaded_tree = await holder.transfer(
+                Transfer(
+                    "upload-dir",
+                    TRANSFER_SOURCE,
+                    target="/shared/tree",
+                    input=source_tree,
+                )
+            )
+            assert uploaded_tree.return_code == 0, uploaded_tree.stderr
+            assert (shared / "tree/payload").read_bytes() == b"directory input"
+            uploaded_again = await holder.transfer(
+                Transfer(
+                    "upload-file",
+                    TRANSFER_SOURCE,
+                    target="/shared/after-directory",
+                    input=source,
+                )
+            )
+            assert uploaded_again.return_code == 0, uploaded_again.stderr
+            assert (shared / "after-directory").read_bytes() == b"host input"
             visible = await holder.exec(
                 ["cat", "/shared/input"],
                 uid=0,

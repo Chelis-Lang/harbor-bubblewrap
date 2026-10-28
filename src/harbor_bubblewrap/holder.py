@@ -249,7 +249,7 @@ class Holder:
             return await run(argv, TRANSFER_SECONDS, env={})
         sandbox = replace(
             self.sandbox,
-            binds=(*self.sandbox.binds, request.bind()),
+            copy_bind=request.bind(),
             uid=0,
             gid=0,
             capabilities=(1 << 0) | (1 << 1) | (1 << 3),

@@ -37,8 +37,8 @@ PATH = "/usr/bin:/bin"
 # point in a read-only root.
 TRUSTED_SEAT = "/tmp/.harbor-seat"
 TRUSTED_BOOTSTRAP = "/tmp/.harbor-init.py"
-TRANSFER_OUTPUT = "/.harbor-transfer-output"
-TRANSFER_SOURCE = "/.harbor-transfer-source"
+TRANSFER_OUTPUT = "/tmp/.harbor-transfer-output"
+TRANSFER_SOURCE = "/tmp/.harbor-transfer-source"
 TRANSFER_HELPER = Path(__file__).with_name("transfer_helper.py")
 
 PASSWD = "root:x:0:0:root:/root:/bin/bash\nnobody:x:65534:65534:nobody:/nonexistent:/bin/false\n"
@@ -69,6 +69,7 @@ class Sandbox:
     no_new_privs: bool = True
     # A copy sandbox holds the trusted copy layout instead of the seat layout.
     copy: bool = False
+    copy_bind: Bind | None = None
 
     def holder_command(
         self,
@@ -122,8 +123,10 @@ class Sandbox:
             TRUSTED_SEAT,
         ]
         args += _interpreter_args()
-        for bind in (*self.binds, *binds):
+        for bind in self.binds:
             args += _copy_bind_args(bind)
+        for bind in binds:
+            args += _bind_args(bind)
         return args + ["--chdir", "/", "--", *helper_argv(payload)]
 
     def _bootstrap_command(self, argv: Sequence[str]) -> list[str]:
@@ -193,6 +196,8 @@ class Sandbox:
         args += _interpreter_args()
         for bind in self.binds:
             args += _copy_bind_args(bind)
+        if self.copy_bind is not None:
+            args += _bind_args(self.copy_bind)
         return args
 
 

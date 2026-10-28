@@ -4,6 +4,8 @@
 
 - Preserve declared mounts in mapped uploads and downloads.
 - Keep each mount's read-only or writable policy in the copy namespace.
+- Put host transfer binds in a private tmpfs outside the persistent seat tree.
+- Support file and directory uploads in either order without a mountpoint collision.
 
 ## 0.1.2 (unreleased)
 
