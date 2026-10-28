@@ -153,10 +153,14 @@ def test_mapped_transfers_preserve_declared_mounts_and_write_policy(tmp_path):
         readonly.mkdir()
         (readonly / "kept").write_bytes(b"unchanged")
         source = tmp_path / "input"
-        source.write_bytes(b"host input")
+        file_script = b"#!/bin/bash\nprintf 'host input'\n"
+        source.write_bytes(file_script)
+        source.chmod(0o755)
         source_tree = tmp_path / "input-tree"
         source_tree.mkdir()
-        (source_tree / "payload").write_bytes(b"directory input")
+        tree_script = b"#!/bin/bash\nprintf 'directory input'\n"
+        (source_tree / "payload").write_bytes(tree_script)
+        (source_tree / "payload").chmod(0o755)
         output = tmp_path / "output"
         output.mkdir()
         closure = tuple(
@@ -196,7 +200,7 @@ def test_mapped_transfers_preserve_declared_mounts_and_write_policy(tmp_path):
                 )
             )
             assert uploaded.return_code == 0, uploaded.stderr
-            assert (shared / "input").read_bytes() == b"host input"
+            assert (shared / "input").read_bytes() == file_script
             uploaded_tree = await holder.transfer(
                 Transfer(
                     "upload-dir",
@@ -206,7 +210,7 @@ def test_mapped_transfers_preserve_declared_mounts_and_write_policy(tmp_path):
                 )
             )
             assert uploaded_tree.return_code == 0, uploaded_tree.stderr
-            assert (shared / "tree/payload").read_bytes() == b"directory input"
+            assert (shared / "tree/payload").read_bytes() == tree_script
             uploaded_again = await holder.transfer(
                 Transfer(
                     "upload-file",
@@ -216,9 +220,9 @@ def test_mapped_transfers_preserve_declared_mounts_and_write_policy(tmp_path):
                 )
             )
             assert uploaded_again.return_code == 0, uploaded_again.stderr
-            assert (shared / "after-directory").read_bytes() == b"host input"
+            assert (shared / "after-directory").read_bytes() == file_script
             visible = await holder.exec(
-                ["cat", "/shared/input"],
+                ["/shared/input"],
                 uid=0,
                 gid=0,
                 cwd="/",
@@ -227,6 +231,16 @@ def test_mapped_transfers_preserve_declared_mounts_and_write_policy(tmp_path):
             )
             assert visible.return_code == 0, visible.stderr
             assert visible.stdout == "host input"
+            tree_executed = await holder.exec(
+                ["/shared/tree/payload"],
+                uid=0,
+                gid=0,
+                cwd="/",
+                environment={"PATH": "/usr/bin"},
+                timeout_sec=10,
+            )
+            assert tree_executed.return_code == 0, tree_executed.stderr
+            assert tree_executed.stdout == "directory input"
             refused = await holder.transfer(
                 Transfer(
                     "upload-file",

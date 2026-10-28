@@ -7,6 +7,7 @@
 - Put host transfer binds in a private tmpfs outside the persistent seat tree.
 - Support file and directory uploads in either order without a mountpoint collision.
 - Inspect directory paths after service stop without a directory copy.
+- Preserve file read, write, and execute permissions on upload. Clear special mode bits.
 
 ## 0.1.2 (unreleased)
 

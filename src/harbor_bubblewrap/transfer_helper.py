@@ -136,7 +136,9 @@ def _pinned_directory(path: str, resolved: int) -> int:
     return descriptor
 
 
-def _write_file(directory: int, name: str, source: int, *, replace: bool) -> None:
+def _write_file(
+    directory: int, name: str, source: int, *, replace: bool, mode: int = FILE_MODE
+) -> None:
     """Publish one regular file in ``directory``, through no links."""
     try:
         existing = _open(directory, name, os.O_PATH | os.O_NOFOLLOW)
@@ -158,7 +160,7 @@ def _write_file(directory: int, name: str, source: int, *, replace: bool) -> Non
     target = _open(
         directory, name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
     )
-    os.fchmod(target, FILE_MODE)
+    os.fchmod(target, mode)
     try:
         _copy_bytes(source, target)
     finally:
@@ -281,7 +283,13 @@ def _upload_file(seat: int, source: int, target: str) -> None:
     contents = _pinned_regular("upload source", source)
     parent = _destination_directory(seat, target, create=True)
     try:
-        _write_file(parent, posixpath.basename(target), contents, replace=True)
+        _write_file(
+            parent,
+            posixpath.basename(target),
+            contents,
+            replace=True,
+            mode=os.fstat(contents).st_mode & 0o777,
+        )
     finally:
         os.close(contents)
         os.close(parent)
@@ -307,7 +315,7 @@ def _copy_upload_tree(source: int, seat: int, where: str) -> None:
             elif stat.S_ISREG(mode):
                 contents = _pinned_regular(name, child)
                 try:
-                    _write_file(seat, name, contents, replace=True)
+                    _write_file(seat, name, contents, replace=True, mode=mode & 0o777)
                 finally:
                     os.close(contents)
             else:
