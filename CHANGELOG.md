@@ -6,6 +6,7 @@
 - Keep each mount's read-only or writable policy in the copy namespace.
 - Put host transfer binds in a private tmpfs outside the persistent seat tree.
 - Support file and directory uploads in either order without a mountpoint collision.
+- Inspect directory paths after service stop without a directory copy.
 
 ## 0.1.2 (unreleased)
 

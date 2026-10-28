@@ -99,3 +99,28 @@ def test_directory_export_refuses_every_link(tmp_path):
     completed = helper(seat, output, "/tree", mode="download-dir")
     assert completed.returncode == 0, completed.stderr
     assert (output / "plain").read_text() == "plain"
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("/directory", True),
+        ("/file", False),
+        ("/missing", False),
+        ("/file/child", False),
+        ("/link", True),
+        ("/host-link", False),
+    ],
+)
+def test_directory_inspection_uses_the_seat_root(tmp_path, source, expected):
+    seat = tmp_path / "seat"
+    seat.mkdir()
+    (seat / "directory").mkdir()
+    (seat / "file").write_bytes(b"seat file")
+    (seat / "link").symlink_to("/directory")
+    (seat / "host-link").symlink_to("/tmp")
+    output = tmp_path / "out"
+    output.mkdir()
+    completed = helper(seat, output, source, mode="is-dir")
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads((output / "file").read_bytes()) is expected

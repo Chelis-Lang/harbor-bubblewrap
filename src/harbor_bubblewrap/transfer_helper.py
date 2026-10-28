@@ -175,6 +175,24 @@ def _make_directory(directory: int, name: str) -> int:
     return descriptor
 
 
+def _inspect_directory(root: int, source: str, output: int) -> None:
+    try:
+        resolved, keep = _resolve(root, root, source)
+    except (FileNotFoundError, NotADirectoryError):
+        directory = False
+    else:
+        try:
+            directory = stat.S_ISDIR(os.fstat(resolved).st_mode)
+        finally:
+            _close([resolved, *keep])
+    descriptor = _open(
+        output, "file", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    )
+    with os.fdopen(descriptor, "wb") as stream:
+        os.fchmod(stream.fileno(), FILE_MODE)
+        stream.write(b"true" if directory else b"false")
+
+
 def _download_file(root: int, source: str, output: int) -> None:
     resolved, keep = _resolve(root, root, source)
     try:
@@ -308,6 +326,7 @@ def _upload_dir(seat: int, source: int, target: str) -> None:
 
 
 MODES = {
+    "is-dir": _inspect_directory,
     "download-file": _download_file,
     "download-dir": _download_dir,
     "upload-file": _upload_file,
@@ -344,7 +363,7 @@ def main(request: dict) -> None:
         raise Refused(f"unknown transfer mode {mode!r}")
     seat = os.open(request["seat"], os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     try:
-        if mode.startswith("download-"):
+        if mode.startswith("download-") or mode == "is-dir":
             output = _transfer_path(request["output"])
             try:
                 MODES[mode](seat, request["source"], output)

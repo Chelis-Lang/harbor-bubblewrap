@@ -86,6 +86,8 @@ Uploads and downloads use one package-owned copy helper and also work after serv
 Mapped copy namespaces retain each declared mount and its read-only or writable policy.
 Host input and output binds stay in a private tmpfs outside the seat tree.
 File and directory uploads can share one service without persistent transfer mountpoints.
+An `is-dir` transfer checks directory metadata, including after service stop.
+It does not copy directory data.
 The helper starts in a read-only host root, and the writable sandbox tree arrives as data.
 A copy process therefore loads no loader file, module, or program from the sandbox tree.
 Links resolve inside the sandbox root, and a file link may end at a regular file.
