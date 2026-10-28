@@ -9,8 +9,9 @@ from dataclasses import dataclass
 
 from .compose import Healthcheck
 from .holder import Holder
-from .process import Completed, run
-from .sandbox import Bind, Sandbox
+from .process import Completed
+from .sandbox import Sandbox
+from .transfer import Transfer
 
 
 @dataclass(frozen=True)
@@ -107,22 +108,17 @@ class Runtime:
             timeout_sec=timeout_sec,
         )
 
-    async def copy(
-        self, name: str, script: str, args: Sequence[str], bind: Bind
-    ) -> None:
-        """Copy files with the tools of the sandbox, in a copy process of its own.
+    async def transfer(self, name: str, request: Transfer) -> None:
+        """Copy files between the host and one sandbox, in its own namespaces.
 
-        A copy also works after the service stops, as ``docker cp`` does.
+        The copy process starts the package-owned helper in the read-only host
+        root and sees the sandbox tree as data. A copy also works after the
+        service stops, as ``docker cp`` does.
         """
-        sandbox = self.plans[name].sandbox
-        argv = sandbox.transfer_command(
-            [str(sandbox.environment / "bin/bash"), "-c", script, "transfer", *args],
-            [bind],
-        )
-        result = await run(argv, None, env={})
+        result = await Holder(self.plans[name].sandbox).transfer(request)
         if result.return_code != 0:
             raise RuntimeError(
-                f"bubblewrap copy {list(args)} in service {name} failed with exit "
+                f"bubblewrap {request.mode} in service {name} failed with exit "
                 f"code {result.return_code}: {result.stderr}"
             )
 

@@ -3,12 +3,17 @@
 The root is a host directory that holds the writable file tree of the sandbox.
 One long-lived bubblewrap process, the holder, keeps the namespaces of the
 sandbox alive. Commands join those namespaces (see ``enter.py``), so their
-files, processes and network persist like those of a container. Short copy
-processes use the same file tree in namespaces of their own.
+files, processes and network persist like those of a container. Copy
+processes run in namespaces of their own.
 
 Inside the sandbox, the store paths of the Nix environment closure are
 read-only binds, and the ``bin`` directory of the environment is ``/usr/bin``.
 The sandbox sees no other host path, except the binds that the caller names.
+
+A copy process does not use that layout. It starts the package-owned helper in
+the read-only host root, and the writable sandbox tree arrives as data at
+``SEAT``. The copy process therefore loads no loader configuration, module or
+program from the sandbox tree.
 """
 
 from __future__ import annotations
@@ -16,6 +21,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -25,15 +31,15 @@ REQUIRED_TOOLS = ("bash", "chmod", "cp", "dirname", "find", "mkdir", "rm", "slee
 
 PATH = "/usr/bin:/bin"
 
-# Mount point for the binds of one copy process. A tmpfs covers it in each copy
-# process, so its mount points never reach the persistent root.
-TRANSFER_DIR = PurePosixPath("/.harbor-transfer")
-
-# The dynamic loader of a copy process reads this file from the writable root,
-# which a seat can write. The empty file below covers it, so a seat cannot load
-# its own library into a process that writes to a host bind.
-PRELOAD = "/etc/ld.so.preload"
-EMPTY_PRELOAD = Path(__file__).with_name("ld.so.preload")
+# Inside a copy process: the writable sandbox tree, read-only as data, and the
+# one host bind. The helper below runs in the read-only host root. These paths
+# sit inside a tmpfs of that process, because bubblewrap cannot create a mount
+# point in a read-only root.
+TRUSTED_SEAT = "/tmp/.harbor-seat"
+TRUSTED_BOOTSTRAP = "/tmp/.harbor-init.py"
+TRANSFER_OUTPUT = "/.harbor-transfer-output"
+TRANSFER_SOURCE = "/.harbor-transfer-source"
+TRANSFER_HELPER = Path(__file__).with_name("transfer_helper.py")
 
 PASSWD = "root:x:0:0:root:/root:/bin/bash\nnobody:x:65534:65534:nobody:/nonexistent:/bin/false\n"
 GROUP = "root:x:0:\nnogroup:x:65534:\n"
@@ -61,7 +67,8 @@ class Sandbox:
     mapped_ids: bool = False
     capabilities: int = 0
     no_new_privs: bool = True
-    transfer: bool = False
+    # A copy sandbox holds the trusted copy layout instead of the seat layout.
+    copy: bool = False
 
     def holder_command(
         self,
@@ -82,31 +89,49 @@ class Sandbox:
             argv = self._bootstrap_command(argv)
         return args + _process_args(argv, workdir, environment)
 
-    def transfer_command(self, argv: Sequence[str], binds: Sequence[Bind]) -> list[str]:
-        """Return the bwrap argv of a copy process over the same file tree.
+    def transfer_command(self, payload: Mapping, binds: Sequence[Bind]) -> list[str]:
+        """Return the bwrap argv of one trusted copy process.
 
-        A copy process runs as user 0 in namespaces of its own, so a link in
-        the sandbox resolves inside the sandbox, not on the host. It loads no
-        library named by the root: an empty preload file covers one seat path.
+        The process root is the read-only host root, so no loader file, module
+        or program of the writable sandbox tree can reach it. The sandbox tree
+        arrives as read-only data at ``TRUSTED_SEAT``. A copy process never
+        joins the namespaces of a service, so a copy works after a stop.
         """
-        args = self._namespace_args(0, 0) + self._layout_args()
-        args += ["--tmpfs", str(TRANSFER_DIR)]
-        # A bind creates its mount point in the root. Cover a preload file only
-        # when the root has one, so a copy leaves the root as it found it.
-        preload = self.root / sandbox_relative(PRELOAD)
-        if preload.exists() or preload.is_symlink():
-            args += ["--ro-bind", str(EMPTY_PRELOAD), PRELOAD]
-        for bind in binds:
-            args += _bind_args(bind)
-        environment = {"PATH": str(self.environment / "bin"), "HOME": "/root"}
-        return args + _process_args(argv, "/", environment)
+        executable = shutil.which("bwrap")
+        if executable is None:
+            raise FileNotFoundError("bwrap is not on PATH")
+        args = [executable, "--die-with-parent", "--new-session", "--unshare-all"]
+        if self.mapped_ids:
+            args += ["--unshare-user", "--cap-add", "ALL"]
+        args += [
+            "--ro-bind",
+            "/",
+            "/",
+            "--tmpfs",
+            "/tmp",
+            "--proc",
+            "/proc",
+            "--dev",
+            "/dev",
+            "--clearenv",
+            "--setenv",
+            "PATH",
+            PATH,
+            "--bind",
+            str(self.root),
+            TRUSTED_SEAT,
+        ]
+        args += _interpreter_args()
+        for bind in (*self.binds, *binds):
+            args += _copy_bind_args(bind)
+        return args + ["--chdir", "/", "--", *helper_argv(payload)]
 
     def _bootstrap_command(self, argv: Sequence[str]) -> list[str]:
         return [
             "/usr/bin/python3.12",
             "-I",
             "-B",
-            "/.harbor-init.py",
+            TRUSTED_BOOTSTRAP if self.copy else "/.harbor-init.py",
             "--bootstrap",
             str(self.uid),
             str(self.gid),
@@ -134,6 +159,8 @@ class Sandbox:
         ]
 
     def _layout_args(self) -> list[str]:
+        if self.copy:
+            return self._copy_layout_args()
         args = ["--bind", str(self.root), "/", "--proc", "/proc", "--dev", "/dev"]
         for path in self.closure:
             args += ["--ro-bind", path, path]
@@ -141,11 +168,59 @@ class Sandbox:
         if self.mapped_ids:
             bootstrap = Path(__file__).with_name("enter.py").resolve()
             args += ["--ro-bind", str(bootstrap), "/.harbor-init.py"]
-        if self.transfer:
-            args += ["--tmpfs", str(TRANSFER_DIR)]
         for bind in self.binds:
             args += _bind_args(bind)
         return args
+
+    def _copy_layout_args(self) -> list[str]:
+        args = [
+            "--ro-bind",
+            "/",
+            "/",
+            "--tmpfs",
+            "/tmp",
+            "--proc",
+            "/proc",
+            "--dev",
+            "/dev",
+            "--bind",
+            str(self.root),
+            TRUSTED_SEAT,
+        ]
+        if self.mapped_ids:
+            bootstrap = Path(__file__).with_name("enter.py").resolve()
+            args += ["--ro-bind", str(bootstrap), TRUSTED_BOOTSTRAP]
+        args += _interpreter_args()
+        for bind in self.binds:
+            args += _copy_bind_args(bind)
+        return args
+
+
+def helper_argv(payload: Mapping) -> list[str]:
+    """Return the command that starts the trusted copy helper."""
+    return [
+        sys.executable,
+        "-I",
+        "-B",
+        str(TRANSFER_HELPER),
+        "--request",
+        json.dumps(dict(payload)),
+    ]
+
+
+def _interpreter_args() -> list[str]:
+    """Keep the copy interpreter reachable when a tmpfs replaces its /tmp."""
+    interpreter = Path(os.path.abspath(sys.executable))
+    if interpreter.parts[:2] == ("/", "tmp") and len(interpreter.parts) > 2:
+        entry = Path("/tmp", interpreter.parts[2])
+        return ["--ro-bind", str(entry), str(entry)]
+    return []
+
+
+def _copy_bind_args(bind: Bind) -> list[str]:
+    """Bind one declared host path inside the read-only copy view of the seat."""
+    target = PurePosixPath(TRUSTED_SEAT, *bind.target.parts[1:])
+    return _bind_args(Bind(bind.source, target, bind.writable))
 
 
 def _bind_args(bind: Bind) -> list[str]:
@@ -197,7 +272,6 @@ def prepare_root(
         if not directory.is_dir():
             directory.mkdir(parents=True)
             directory.chmod(mode)
-    (root / TRANSFER_DIR.name).mkdir(mode=0o755, exist_ok=True)
     if not (root / "bin").exists() and not (root / "bin").is_symlink():
         (root / "bin").symlink_to("usr/bin")
     hosts = f"127.0.0.1 localhost {hostname}\n::1 localhost {hostname}\n"

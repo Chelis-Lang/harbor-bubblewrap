@@ -24,11 +24,18 @@ The package does not supply application-specific authorization or validate task 
 
 ## Transfers
 
-A download process sees the writable sandbox root and one host bind.
-The backend covers a dynamic loader preload file that the seat wrote, so the process loads no seat library.
-The host accepts a download only when each entry is a regular file or a directory.
-It refuses a symbolic link, a device, a pipe, and a socket.
-A transfer error names the refused path and leaves the host target empty.
+A download process starts the package-owned helper in a read-only host root.
+The writable sandbox tree arrives as read-only data, so the seat cannot name a loader file, module, or program for that process.
+Links resolve inside the sandbox root. A file export may end at a regular file through that link resolution.
+Each source descriptor receives a type check before any data read.
+The helper refuses a directory export that contains a link.
+It refuses a pipe, a device, and a socket before it reads any data, so a source without a writer cannot hold the transfer.
+The host revalidates each private staged entry and publishes a fresh regular file or directory.
+Below the selected destination the host follows no link.
+It replaces an existing file entry and refuses an existing directory link.
+A refusal publishes no downloaded entry, and that refusal leaves the existing destination contents unchanged.
+A host I/O error during publication can leave partial output.
+A transfer error names the refused path.
 Use trusted task definitions for these runs, as for all other seat commands.
 
 ## Operational limits

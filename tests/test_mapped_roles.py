@@ -4,11 +4,12 @@ import asyncio
 import json
 import os
 import sys
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 import pytest
 from harbor_bubblewrap.holder import Holder
-from harbor_bubblewrap.sandbox import Bind, Sandbox, prepare_root
+from harbor_bubblewrap.sandbox import Sandbox, prepare_root
+from harbor_bubblewrap.transfer import Transfer
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "linux" or os.environ.get("HELL_TEST_NAMESPACES") != "1",
@@ -103,16 +104,38 @@ def test_mapped_seat_cannot_read_root_file_and_stopped_tree_can_be_copied(tmp_pa
             target = tmp_path / "download"
             target.mkdir()
             copied = await holder.transfer(
-                ["cp", "/private/seat", "/.harbor-transfer/download/seat"],
-                [Bind(target, PurePosixPath("/.harbor-transfer/download"), True)],
-                10,
+                Transfer("download-file", "/private/seat", output=target)
             )
             assert copied.return_code == 0, copied.stderr
-            assert (target / "seat").read_bytes() == b"private seat bytes"
+            assert (target / "file").read_bytes() == b"private seat bytes"
         finally:
             await holder.stop()
             if private:
-                cleaned = await holder.transfer(["rm", "-rf", "/private"], (), 10)
-                assert cleaned.return_code == 0, cleaned.stderr
+                cleaner = Holder(
+                    Sandbox(
+                        root,
+                        Path("/usr"),
+                        closure,
+                        mapped_ids=True,
+                        capabilities=11,
+                    )
+                )
+                try:
+                    await cleaner.start(
+                        ["sleep", "infinity"],
+                        workdir="/",
+                        environment={"PATH": "/usr/bin"},
+                    )
+                    cleaned = await cleaner.exec(
+                        ["rm", "-rf", "/private"],
+                        uid=0,
+                        gid=0,
+                        cwd="/",
+                        environment={"PATH": "/usr/bin"},
+                        timeout_sec=10,
+                    )
+                    assert cleaned.return_code == 0, cleaned.stderr
+                finally:
+                    await cleaner.stop()
 
     asyncio.run(exercise())

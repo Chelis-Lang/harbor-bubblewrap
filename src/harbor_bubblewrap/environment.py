@@ -13,7 +13,6 @@ See the package README for the supported contract and limits.
 from __future__ import annotations
 
 import asyncio
-import os
 import platform
 import shutil
 import tempfile
@@ -30,20 +29,20 @@ from . import compose, nix
 from .sandbox import (
     PATH,
     REQUIRED_TOOLS,
-    TRANSFER_DIR,
+    TRANSFER_SOURCE,
     Bind,
     Sandbox,
     prepare_root,
     remove_root,
 )
 from .services import Plan, Runtime
+from .transfer import Transfer, publish_dir, publish_file
 
 DEFINITION = "default.nix"
 COMPOSE = "docker-compose.yaml"
 MAIN = "main"
 PROGRAMS = ("bwrap", "nix-build", "nix-store")
-SOURCE = TRANSFER_DIR / "source"
-TARGET = TRANSFER_DIR / "target"
+SOURCE = TRANSFER_SOURCE
 # The main service of a task with no Compose file, and of a Compose file
 # that leaves main out. It runs as root, as a Docker image does by default.
 DEFAULT_MAIN = compose.Service(
@@ -277,21 +276,21 @@ class BubblewrapEnvironment(BaseEnvironment):
     @override
     async def upload_file(self, source_path: Path | str, target_path: str) -> None:
         source = Path(source_path).resolve(strict=True)
-        await self._require_runtime().copy(
+        if not source.is_file():
+            raise ValueError(f"upload source is not a regular file: {source}")
+        await self._require_runtime().transfer(
             MAIN,
-            'mkdir -p -- "$(dirname -- "$1")" && cp -- "$2" "$1"',
-            [target_path, str(SOURCE)],
-            Bind(source, SOURCE, writable=False),
+            Transfer("upload-file", str(SOURCE), target=str(target_path), input=source),
         )
 
     @override
     async def upload_dir(self, source_dir: Path | str, target_dir: str) -> None:
         source = Path(source_dir).resolve(strict=True)
-        await self._require_runtime().copy(
+        if not source.is_dir():
+            raise ValueError(f"upload source is not a directory: {source}")
+        await self._require_runtime().transfer(
             MAIN,
-            'mkdir -p -- "$1" && cp -R -- "$2"/. "$1"',
-            [target_dir, str(SOURCE)],
-            Bind(source, SOURCE, writable=False),
+            Transfer("upload-dir", str(SOURCE), target=str(target_dir), input=source),
         )
 
     @override
@@ -318,17 +317,12 @@ class BubblewrapEnvironment(BaseEnvironment):
         self, name: str, source_path: str, target_path: Path | str
     ) -> None:
         target = Path(target_path)
-        target.parent.mkdir(parents=True, exist_ok=True)
         staging = Path(tempfile.mkdtemp(dir=self._require_state()))
         try:
-            await self._require_runtime().copy(
-                name,
-                'cp -- "$1" "$2"/file',
-                [source_path, str(TARGET)],
-                Bind(staging, TARGET, writable=True),
+            await self._require_runtime().transfer(
+                name, Transfer("download-file", source_path, output=staging)
             )
-            _require_plain_transfer(staging)
-            shutil.move(staging / "file", target)
+            publish_file(staging / "file", target)
         finally:
             shutil.rmtree(staging, ignore_errors=True)
 
@@ -336,17 +330,12 @@ class BubblewrapEnvironment(BaseEnvironment):
         self, name: str, source_dir: str, target_dir: Path | str
     ) -> None:
         target = Path(target_dir)
-        target.mkdir(parents=True, exist_ok=True)
         staging = Path(tempfile.mkdtemp(dir=self._require_state()))
         try:
-            await self._require_runtime().copy(
-                name,
-                'cp -R -- "$1"/. "$2"',
-                [source_dir, str(TARGET)],
-                Bind(staging, TARGET, writable=True),
+            await self._require_runtime().transfer(
+                name, Transfer("download-dir", source_dir, output=staging)
             )
-            _require_plain_transfer(staging)
-            shutil.copytree(staging, target, dirs_exist_ok=True)
+            publish_dir(staging, target)
         finally:
             shutil.rmtree(staging, ignore_errors=True)
 
@@ -440,22 +429,3 @@ def _dockerfile_workdir(path: Path | None) -> str | None:
             if value:
                 workdir = str(PurePosixPath(workdir or "/") / value)
     return workdir
-
-
-def _require_plain_transfer(directory: Path) -> None:
-    """Raise unless each copied entry is a regular file or a directory.
-
-    The copy process writes into a host bind and can make any entry there. A
-    link or a special file in that bind could hand the host a path that it
-    reads outside the sandbox. Harbor reads the downloaded entries on the host.
-    """
-    with os.scandir(directory) as entries:
-        for entry in entries:
-            if entry.is_symlink():
-                raise RuntimeError(f"The download of {entry.path} is a symbolic link")
-            if entry.is_dir(follow_symlinks=False):
-                _require_plain_transfer(Path(entry.path))
-            elif not entry.is_file(follow_symlinks=False):
-                raise RuntimeError(
-                    f"The download of {entry.path} is not a regular file"
-                )

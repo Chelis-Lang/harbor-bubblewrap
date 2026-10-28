@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "harbor-bubblewrap"
-version = "0.1.1"
+version = "0.1.2"
 description = "Harbor environments with bubblewrap and Nix"
 readme = "README.md"
 license = "MIT"
@@ -37,7 +37,7 @@ include = ["harbor_bubblewrap"]
 namespaces = false
 
 [tool.setuptools.package-data]
-harbor_bubblewrap = ["tasks/**/*", "probe/*.nix", "ld.so.preload"]
+harbor_bubblewrap = ["tasks/**/*", "probe/*.nix"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

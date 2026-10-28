@@ -285,17 +285,53 @@ async def main(environment_dir, trial_dir):
         try:
             await environment.download_dir("/app/data", directory)
         except RuntimeError:
-            results["dir_link_blocked"] = list(directory.iterdir()) == []
+            results["dir_link_blocked"] = (
+                not directory.exists() or list(directory.iterdir()) == []
+            )
         else:
             results["dir_link_blocked"] = False
-        result = await environment.exec("printf '/etc/absent.so\\n' > /etc/ld.so.preload")
+        result = await environment.exec(
+            "printf '/etc/absent.so\\n' > /etc/ld.so.preload && "
+            "printf '/etc/absent-nix.so\\n' > /etc/ld-nix.so.preload"
+        )
         assert result.return_code == 0, result.stderr
+        await environment.upload_file(source, "/app/loader-input")
+        loaded = trial / "loader-download"
+        await environment.download_file("/app/loader-input", loaded)
+        results["loader_isolated"] = loaded.read_text() == "public-payload"
         try:
             await environment.download_file("/app/absent-input", trial / "absent")
         except RuntimeError as error:
             results["preload_ignored"] = "ld.so" not in str(error)
         else:
             results["preload_ignored"] = False
+        destination = trial / "download-dir"
+        canary_directory = trial / "canary"
+        canary_directory.mkdir()
+        (canary_directory / "leak").write_text("host-canary")
+        destination.mkdir()
+        (destination / "child").symlink_to(canary_directory, target_is_directory=True)
+        result = await environment.exec(
+            "mkdir -p -- /app/data2/child && printf 'plain' > /app/data2/child/leak"
+        )
+        assert result.return_code == 0, result.stderr
+        try:
+            await environment.download_dir("/app/data2", destination)
+        except RuntimeError:
+            results["destination_link_blocked"] = (
+                (canary_directory / "leak").read_text() == "host-canary"
+            )
+        else:
+            results["destination_link_blocked"] = False
+        result = await environment.exec("mkfifo -- /app/fifo")
+        assert result.return_code == 0, result.stderr
+        fifo = trial / "fifo-download"
+        try:
+            await environment.download_file("/app/fifo", fifo)
+        except RuntimeError:
+            results["fifo_blocked"] = not fifo.exists()
+        else:
+            results["fifo_blocked"] = False
         emit = (
             "with open('/proc/1/fd/1', 'w') as stream: "
             "stream.write('old-prefix' + 'x' * 65536 + 'service-diagnostic')"
@@ -347,6 +383,9 @@ def test_host_boundary_and_transfers_survive_service_changes(tmp_path, monkeypat
     assert result["host_link_blocked"] is True
     assert result["dir_link_blocked"] is True
     assert result["preload_ignored"] is True
+    assert result["loader_isolated"] is True
+    assert result["destination_link_blocked"] is True
+    assert result["fifo_blocked"] is True
     assert result["download"] == "public-payload"
     assert result["stopped_error"].endswith("service-diagnostic")
     assert "old-prefix" not in result["stopped_error"]

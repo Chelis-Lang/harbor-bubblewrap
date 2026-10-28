@@ -16,7 +16,8 @@ from pathlib import Path
 
 from .idmap import IdMap
 from .process import Completed, kill, run
-from .sandbox import PATH, Bind, Sandbox
+from .sandbox import PATH, Sandbox, helper_argv
+from .transfer import TRANSFER_SECONDS, Transfer
 
 ENTER = Path(__file__).with_name("enter.py")
 # Bound on bubblewrap setup. A healthy setup ends in milliseconds.
@@ -136,8 +137,9 @@ class Holder:
             del self._tail[:-LOG_TAIL_BYTES]
 
     async def _wait_for_root(self) -> None:
-        """Wait until the sandbox process uses the sandbox root."""
-        expected = self.sandbox.root.stat()
+        """Wait until the sandbox process uses its selected root."""
+        selected = Path("/") if self.sandbox.copy else self.sandbox.root
+        expected = selected.stat()
         deadline = time.monotonic() + SETUP_SECONDS
         while True:
             if not self.running:
@@ -234,39 +236,45 @@ class Holder:
                 if notification is not None:
                     await notification
 
-    async def transfer(
-        self, argv: Sequence[str], binds: Sequence[Bind], timeout_sec: float
-    ) -> Completed:
+    async def transfer(self, request: Transfer) -> Completed:
+        """Run one trusted copy process over this sandbox tree.
+
+        The copy process does not join the namespaces of a service, so it also
+        works after the service stops. A mapped sandbox needs one identity map
+        for the copy, so that copy runs in a short-lived holder of its own.
+        """
+        payload = request.payload()
         if not self.sandbox.mapped_ids:
-            return await run(
-                self.sandbox.transfer_command(argv, binds), timeout_sec, env={}
-            )
+            argv = self.sandbox.transfer_command(payload, [request.bind()])
+            return await run(argv, TRANSFER_SECONDS, env={})
         sandbox = replace(
             self.sandbox,
-            binds=self.sandbox.binds + tuple(binds),
+            binds=(request.bind(),),
             uid=0,
             gid=0,
             capabilities=(1 << 0) | (1 << 1) | (1 << 3),
             no_new_privs=True,
-            transfer=True,
+            copy=True,
         )
         holder = Holder(sandbox)
         try:
             await holder.start(
-                ["/usr/bin/sleep", "infinity"],
+                helper_argv(payload),
                 workdir="/",
                 environment={"PATH": PATH},
             )
-            return await holder.exec(
-                argv,
-                uid=0,
-                gid=0,
-                cwd="/",
-                environment={"PATH": PATH},
-                timeout_sec=timeout_sec,
-            )
+            return await holder.wait()
         finally:
             await holder.stop()
+
+    async def wait(self) -> Completed:
+        """Wait for the sandbox command to exit and report its status."""
+        if self._process is None:
+            raise RuntimeError("the sandbox command was not started")
+        await self._process.wait()
+        if self._output is not None:
+            await self._output
+        return Completed(self._process.returncode or 0, None, self.log_tail())
 
     async def stop(self) -> None:
         """End the sandbox and wait until its PID namespace is empty."""

@@ -1,6 +1,5 @@
 recursive-include src/harbor_bubblewrap/tasks *
 recursive-include src/harbor_bubblewrap/probe *.nix
-include src/harbor_bubblewrap/ld.so.preload
 recursive-include tests *.py
 recursive-include tools *.py *.sh
 include README.md

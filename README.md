@@ -82,12 +82,15 @@ For `main`, the task workdir overrides Compose, then the selected Dockerfile WOR
 Other services use the same order without the task workdir.
 Each service retains files, background processes, and network state between commands.
 Services start in dependency order and honor healthchecks.
-Uploads and downloads use immutable Nix tools and also work after service stop.
-Links resolve inside the sandbox, not on the host.
-A download lands in a host directory only when each entry is a regular file or a directory.
-The backend refuses a link or a special file, so it never hands the host a path from the sandbox.
-A copy process also loads no library named by the writable root.
-A copy leaves the root as it found it.
+Uploads and downloads use one package-owned copy helper and also work after service stop.
+The helper starts in a read-only host root, and the writable sandbox tree arrives as data.
+A copy process therefore loads no loader file, module, or program from the sandbox tree.
+Links resolve inside the sandbox root, and a file link may end at a regular file.
+A download refuses a directory link, a special file, and every other non-regular entry.
+The host revalidates each private staged entry and publishes fresh regular files and directories.
+Below the selected destination the host follows no link: it replaces an existing file entry and refuses an existing directory link.
+A refusal publishes no downloaded entry, and that refusal leaves the existing destination contents unchanged.
+An existing destination can already hold files, and a host I/O error can leave partial output.
 
 Holder failures retain a bounded 4,000-byte diagnostic tail.
 Command and healthcheck output has no package byte limit.
